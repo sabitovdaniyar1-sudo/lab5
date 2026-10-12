@@ -1,0 +1,56 @@
+name: Security Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: API security tests (SQLi, XSS)
+        run: python -m unittest discover -s tests -v
+
+      - name: Run Bandit (SAST) - secure code
+        run: bandit -r app.py -f txt -o bandit_report.txt || true
+
+      - name: Bandit gate (fail on MEDIUM+ in secure code)
+        run: bandit -r app.py -ll
+
+      - name: Bandit on vulnerable demo (report only)
+        run: bandit -r app_vulnerable.py -f json -o bandit_vuln.json || true
+
+      - name: Start app
+        run: |
+          nohup python app.py > app.log 2>&1 &
+          sleep 5
+          curl -f http://localhost:5000/api/users
+
+      - name: ZAP baseline scan (DAST)
+        run: |
+          mkdir -p zap && chmod 777 zap
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+            -t http://localhost:5000 -r zap_report.html -I
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit_report.txt
+            bandit_vuln.json
+            zap/zap_report.html
